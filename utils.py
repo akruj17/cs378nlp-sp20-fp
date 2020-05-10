@@ -53,6 +53,7 @@ def load_dataset(path):
     Returns:
         Dataset metadata and samples.
     """
+    print("***********************" + path)
     with gzip.open(path, 'rb') as f:
         elems = [
             json.loads(l.rstrip())
@@ -103,6 +104,16 @@ def load_embeddings(path):
             except:
                 pass
     return embedding_map
+
+def load_tag_file(path):
+    tags = []
+    while True: 
+        line = file.readline() 
+        if not line: 
+            break
+        tags.append(line.strip())    
+    file.close() 
+    return tags
 
 
 def search_span_endpoints(start_probs, end_probs, window=15):

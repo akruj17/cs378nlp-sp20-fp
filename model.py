@@ -11,6 +11,8 @@ import torch.nn.functional as F
 from utils import cuda, load_cached_embeddings
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+DEPENDENCY_TOKENS = 48
+POS_TOKENS = 53
 
 def _sort_batch_by_length(tensor, sequence_lengths):
     """
@@ -61,16 +63,26 @@ class AlignedAttention(nn.Module):
     """
     def __init__(self, p_dim):
         super().__init__()
+        self.p_dim = p_dim
         self.linear = nn.Linear(p_dim, p_dim)
         self.relu = nn.ReLU()
 
     def forward(self, p, q, q_mask):
         # Compute scores
+        # print(self.p_dim)
+        # print(p.size())
+        # print(q.size())
+        # print(q_mask.size())
         p_key = self.relu(self.linear(p))  # [batch_size, p_len, p_dim]
         q_key = self.relu(self.linear(q))  # [batch_size, q_len, p_dim]
+        # print("PKEY" + str(p_key.size()))
+        # print("QKEY" + str(q_key.size()))
         scores = p_key.bmm(q_key.transpose(2, 1))  # [batch_size, p_len, q_len]
+        print(scores.size())
         # Stack question mask p_len times
         q_mask = q_mask.unsqueeze(1).repeat(1, scores.size(1), 1)
+        # print(q_mask.size())
+        # print("*************")
         # Assign -inf to pad tokens
         scores.data.masked_fill_(q_mask.data, -float('inf'))
         # Normalize along question length
@@ -141,7 +153,7 @@ class BaselineReader(nn.Module):
     [Architecture]
         0) Inputs: passages and questions
         1) Embedding Layer: converts words to vectors
-        2) Context2Query: computes weighted sum of question embeddings for
+        2) Context2Query: computes weighted sum of question word_embeddings for
                each position in passage.
         3) Passage Encoder: LSTM or GRU.
         4) Question Encoder: LSTM or GRU.
@@ -173,17 +185,29 @@ class BaselineReader(nn.Module):
         self.args = args
         self.pad_token_id = args.pad_token_id
 
-        # Initialize embedding layer (1)
-        self.embedding = nn.Embedding(args.vocab_size, args.embedding_dim)
+        # Initialize embedding layers (1)
+        self.word_embedding = nn.Embedding(args.vocab_size, args.embedding_dim)
+        self.pos_embedding = nn.Embedding(len(POS_TOKENS), args.embedding_dim)
+        self.dep_embedding = nn.Embedding(len(DEPENDENCY_TOKENS), args.embedding_dim)
+
+        dependency_embeddings = torch.zeros(
+            (len(DEPENDENCY_TOKENS), self.args.embedding_dim)
+        ).uniform_(-0.1, 0.1)
+        self.dep_embedding.weight.data = cuda(self.args, dependency_embeddings)
+
+        pos_embeddings = torch.zeros(
+            (len(POS_TOKENS), self.args.embedding_dim)
+        ).uniform_(-0.1, 0.1)
+        self.pos_embedding.weight.data = cuda(self.args, pos_embeddings)
 
         # Initialize Context2Query (2)
-        self.aligned_att = AlignedAttention(args.embedding_dim)
+        self.aligned_att = AlignedAttention(args.embedding_dim * 3)
 
         rnn_cell = nn.LSTM if args.rnn_cell_type == 'lstm' else nn.GRU
 
         # Initialize passage encoder (3)
         self.passage_rnn = rnn_cell(
-            args.embedding_dim * 2,
+            args.embedding_dim * 6,
             args.hidden_dim,
             bidirectional=args.bidirectional,
             batch_first=True,
@@ -191,7 +215,7 @@ class BaselineReader(nn.Module):
 
         # Initialize question encoder (4)
         self.question_rnn = rnn_cell(
-            args.embedding_dim,
+            args.embedding_dim * 3,
             args.hidden_dim,
             bidirectional=args.bidirectional,
             batch_first=True,
@@ -224,21 +248,22 @@ class BaselineReader(nn.Module):
         """
         embedding_map = load_cached_embeddings(path)
 
-        # Create embedding matrix. By default, embeddings are randomly
+        # Create embedding matrix. By default, word_embeddings are randomly
         # initialized from Uniform(-0.1, 0.1).
-        embeddings = torch.zeros(
+        word_embeddings = torch.zeros(
             (len(vocabulary), self.args.embedding_dim)
         ).uniform_(-0.1, 0.1)
 
-        # Initialize pre-trained embeddings.
+        # Initialize pre-trained word_embeddings.
         num_pretrained = 0
         for (i, word) in enumerate(vocabulary.words):
             if word in embedding_map:
-                embeddings[i] = torch.tensor(embedding_map[word])
+                word_embeddings[i] = torch.tensor(embedding_map[word])
                 num_pretrained += 1
 
         # Place embedding matrix on GPU.
-        self.embedding.weight.data = cuda(self.args, embeddings)
+        self.word_embedding.weight.data = cuda(self.args, word_embeddings)
+
 
         return num_pretrained
 
@@ -281,11 +306,18 @@ class BaselineReader(nn.Module):
         question_lengths = question_mask.long().sum(-1)  # [batch_size]
 
         # 1) Embedding Layer: Embed the passage and question.
-        passage_embeddings = self.embedding(batch['passages'])  # [batch_size, p_len, p_dim]
-        question_embeddings = self.embedding(batch['questions'])  # [batch_size, q_len, q_dim]
+        passage_embeddings = torch.cat((    # [batch_size, p_len, p_dim]
+            self.word_embedding(batch['passages_words']),
+            self.pos_embedding(batch['passages_pos']),
+            self.dep_embedding(batch['passages_dep'])), 2)
 
-        # 2) Context2Query: Compute weighted sum of question embeddings for
-        #        each passage word and concatenate with passage embeddings.
+        question_embeddings = torch.cat((    # [batch_size, q_len, q_dim]
+            self.word_embedding(batch['questions_words']),
+            self.pos_embedding(batch['questions_pos']),
+            self.dep_embedding(batch['questions_dep'])), 2)
+
+        # 2) Context2Query: Compute weighted sum of question word_embeddings for
+        #        each passage word and concatenate with passage word_embeddings.
         aligned_scores = self.aligned_att(
             passage_embeddings, question_embeddings, ~question_mask
         )  # [batch_size, p_len, q_len]
@@ -301,7 +333,7 @@ class BaselineReader(nn.Module):
         )  # [batch_size, p_len, p_hid]
         passage_hidden = self.dropout(passage_hidden)  # [batch_size, p_len, p_hid]
 
-        # 4) Question Encoder: Encode question embeddings.
+        # 4) Question Encoder: Encode question word_embeddings.
         question_hidden = self.sorted_rnn(
             question_embeddings, question_lengths, self.question_rnn
         )  # [batch_size, q_len, q_hid]

@@ -34,7 +34,7 @@ from tqdm import tqdm
 from data import QADataset, Tokenizer, Vocabulary
 
 from model import BaselineReader
-from utils import cuda, search_span_endpoints, unpack
+from utils import cuda, search_span_endpoints, unpack, load_tag_file
 
 
 _TQDM_BAR_SIZE = 75
@@ -192,6 +192,18 @@ parser.add_argument(
     type=float,
     default=0.,
     help='dropout on passage and question vectors',
+)
+parser.add_argument(
+    '--pos_tag_path',
+    type=str,
+    default='pos_tags.txt',
+    help="file listing all possible part of speech tags"
+)
+parser.add_argument(
+    '--dep_tag_path',
+    type=str,
+    default='dep_tags.txt',
+    help="file listing all possible dependency tags"
 )
 
 
@@ -464,11 +476,21 @@ def main(args):
     train_dataset = QADataset(args, args.train_path)
     dev_dataset = QADataset(args, args.dev_path)
 
-    # Create vocabulary and tokenizer.
-    vocabulary = Vocabulary(train_dataset.samples, args.vocab_size)
-    tokenizer = Tokenizer(vocabulary)
+    # Create tokenizers for words, pos tags, and dependency tags.
+    word_vocabulary = Vocabulary(train_dataset.samples, args.vocab_size)
+    word_tokenizer = Tokenizer(word_vocabulary)
+    # pos tags
+    pos_tags = load_tag_file(args.pos_tag_path)
+    pos_vocabulary = Vocabulary(pos_tags, len(pos_tags))
+    pos_tokenizer = Tokenizer(pos_vocabulary)
+    # dep tags
+    dep_tags = load_tag_file(args.dep_tag_path)
+    dep_vocabulary = Vocabulary(dep_tags, len(dep_tags))
+    dep_tokenizer = Tokenizer(dep_vocabulary)
+
+
     for dataset in (train_dataset, dev_dataset):
-        dataset.register_tokenizer(tokenizer)
+        dataset.register_tokenizers(word_tokenizer, pos_tokenizer, dep_tokenizer)
     args.vocab_size = len(vocabulary)
     args.pad_token_id = tokenizer.pad_token_id
     print(f'vocab words = {len(vocabulary)}')

@@ -7,6 +7,7 @@ Author:
 import collections
 import itertools
 import torch
+import spacy
 
 from torch.utils.data import Dataset
 from random import shuffle
@@ -34,10 +35,18 @@ class Vocabulary:
         encoding: A dictionary mapping words (string) to indices (int).
         decoding: A dictionary mapping indices (int) to words (string).
     """
-    def __init__(self, samples, vocab_size):
-        self.words = self._initialize(samples, vocab_size)
+    def __init__(self, samples, vocab_size, is_list):
+        self.words = self._initialize_list(samples) if is_list else self._initialize(samples, vocab_size)
         self.encoding = {word: index for (index, word) in enumerate(self.words)}
         self.decoding = {index: word for (index, word) in enumerate(self.words)}
+
+    def _initialize_list(self, samples):
+        vocab = collections.defaultdict(int)
+        for token in samples:
+            vocab[token.lower()] += 1
+        top_words = [word for word in vocab]
+        words = [PAD_TOKEN, UNK_TOKEN] + top_words
+        return words
 
     def _initialize(self, samples, vocab_size):
         """
@@ -141,10 +150,10 @@ class QADataset(Dataset):
         self.args = args
         self.meta, self.elems = load_dataset(path)
         self.samples = self._create_samples()
-        self.tokenizer = None
+        self.tokenizers = None
         self.batch_size = args.batch_size if 'batch_size' in args else 1
-        self.pad_token_id = self.tokenizer.pad_token_id \
-            if self.tokenizer is not None else 0
+        self.pad_token_id = self.tokenizers['word'].pad_token_id \
+            if self.tokenizers is not None else 0
 
     def _create_samples(self):
         """
@@ -180,7 +189,7 @@ class QADataset(Dataset):
                 
         return samples
 
-    def _create_data_generator(self, shuffle_examples=False):
+    def _create_data_generator(self, shuffle_examples=False, nlp):
         """
         Converts preprocessed text data to Torch tensors and returns a
         generator.
@@ -192,7 +201,7 @@ class QADataset(Dataset):
             A generator that iterates through all examples one by one.
             (Tuple of tensors)
         """
-        if self.tokenizer is None:
+        if self.tokenizers is None:
             raise RuntimeError('error: no tokenizer registered')
 
         example_idxs = list(range(len(self.samples)))
@@ -201,6 +210,10 @@ class QADataset(Dataset):
 
         passages = []
         questions = []
+        passages_pos = []
+        passages_dep = []
+        questions_pos = []
+        questions_dep = []
         start_positions = []
         end_positions = []
         for idx in example_idxs:
@@ -209,21 +222,47 @@ class QADataset(Dataset):
 
             # Convert words to tensor.
             passage_ids = torch.tensor(
-                self.tokenizer.convert_tokens_to_ids(passage)
+                self.tokenizers['word'].convert_tokens_to_ids(passage),
             )
             question_ids = torch.tensor(
-                self.tokenizer.convert_tokens_to_ids(question)
+                self.tokenizers['word'].convert_tokens_to_ids(question)
             )
+
+            # use spaCy for parsing part of speech and dependency tags
+            passage_doc = nlp(passage)
+            question_doc = nlp(question)
+
+            passage_pos_tags = torch(
+                self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in passage_doc])
+            )
+
+            question_pos_tags = torch(
+                self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in question_doc])
+            )
+
+            passage_dep_tags = torch(
+                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in nlp(passage)])
+            )
+
+            question_dep_tags = torch(
+                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in nlp(question)])
+            )
+
             answer_start_ids = torch.tensor(answer_start)
             answer_end_ids = torch.tensor(answer_end)
 
             # Store each part in an independent list.
             passages.append(passage_ids)
             questions.append(question_ids)
+            passages_pos.append(passage_pos_tags)
+            questions_pos.append(question_pos_tags)
+            passages_dep.append(passage_dep_tags)
+            questions_dep.append(question_dep_tags)
             start_positions.append(answer_start_ids)
             end_positions.append(answer_end_ids)
 
-        return zip(passages, questions, start_positions, end_positions)
+        return zip(passages, questions, passages_pos, questions_pos, 
+                passages_dep, questions_dep, start_positions, end_positions)
 
     def _create_batches(self, generator, batch_size):
         """
@@ -254,18 +293,26 @@ class QADataset(Dataset):
             if no_more_data and bsz == 0:
                 break
 
-            passages = []
-            questions = []
+            passages_words = []
+            questions_words = []
+            passages_pos = []
+            questions_pos = []
+            passages_dep = []
+            questions_dep = []
             start_positions = torch.zeros(bsz)
             end_positions = torch.zeros(bsz)
             max_passage_length = 0
             max_question_length = 0
             # Check max lengths for both passages and questions
             for ii in range(bsz):
-                passages.append(current_batch[ii][0])
-                questions.append(current_batch[ii][1])
-                start_positions[ii] = current_batch[ii][2]
-                end_positions[ii] = current_batch[ii][3]
+                passages_words.append(current_batch[ii][0])
+                questions_words.append(current_batch[ii][1])
+                passages_pos.append(current_batch[ii][2])
+                questions_pos.append(current_batch[ii][3])
+                passages_dep.append(current_batch[ii][4])
+                questions_dep.append(current_batch[ii][5])
+                start_positions[ii] = current_batch[ii][6]
+                end_positions[ii] = current_batch[ii][7]
                 max_passage_length = max(
                     max_passage_length, len(current_batch[ii][0])
                 )
@@ -275,18 +322,32 @@ class QADataset(Dataset):
 
             # Assume pad token index is 0. Need to change here if pad token
             # index is other than 0.
-            padded_passages = torch.zeros(bsz, max_passage_length)
-            padded_questions = torch.zeros(bsz, max_question_length)
+            padded_passages_words = torch.zeros(bsz, max_passage_length)
+            padded_questions_words = torch.zeros(bsz, max_question_length)
+            padded_passages_pos = torch.zeros(bsz, max_passage_length)
+            padded_questions_pos = torch.zeros(bsz, max_question_length)
+            padded_passages_dep = torch.zeros(bsz, max_passage_length)
+            padded_questions_dep = torch.zeros(bsz, max_question_length)
             # Pad passages and questions
-            for iii, passage_question in enumerate(zip(passages, questions)):
-                passage, question = passage_question
-                padded_passages[iii][:len(passage)] = passage
-                padded_questions[iii][:len(question)] = question
+            for iii, passage_question in enumerate(zip(passages_words, questions_words,
+                    passages_pos, questions_pos, passages_dep, questions_dep)):
+                p_words, q_words, p_pos, q_pos, p_dep, q_dep = passage_question
+                padded_passages_words[iii][:len(p_words)] = p_words
+                padded_questions_words[iii][:len(q_words)] = q_words
+                padded_passages_pos[iii][:len(p_pos)] = p_pos
+                padded_questions_pos[iii][:len(q_pos)] = q_pos
+                padded_passages_dep[iii][:len(p_dep)] = p_dep
+                padded_questions_pos[iii][:len(q_dep)] = q_dep
+                
 
             # Create an input dictionary
             batch_dict = {
-                'passages': cuda(self.args, padded_passages).long(),
-                'questions': cuda(self.args, padded_questions).long(),
+                'passages_words': cuda(self.args, padded_passages_words).long(),
+                'questions_words': cuda(self.args, padded_questions_words).long(),
+                'passages_pos': cuda(self.args, padded_passages_pos).long(),
+                'questions_pos': cuda(self.args, padded_questions_pos).long(),
+                'passages_dep': cuda(self.args, padded_passages_dep).long(),
+                'questions_dep': cuda(self.args, padded_questions_dep).long(),
                 'start_positions': cuda(self.args, start_positions).long(),
                 'end_positions': cuda(self.args, end_positions).long()
             }
@@ -313,14 +374,14 @@ class QADataset(Dataset):
             self.batch_size
         )
 
-    def register_tokenizer(self, tokenizer):
+    def register_tokenizers(self, word_tokenizer, pos_tokenizer, dep_tokenizer):
         """
         Stores `Tokenizer` object as an instance variable.
 
         Args:
             tokenizer: If `True`, shuffle examples. Default: `False`
         """
-        self.tokenizer = tokenizer
+        self.tokenizers = {"word": word_tokenizer, "pos": pos_tokenizer, "dep": dep_tokenizer}
     
     def __len__(self):
         return len(self.samples)
