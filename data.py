@@ -38,7 +38,6 @@ class Vocabulary:
     """
     def __init__(self, samples, vocab_size, is_list):
         self.words = self._initialize_list(samples) if is_list else self._initialize(samples, vocab_size)
-        print("LIST IS: " + str(self.words))
         self.encoding = {word: index for (index, word) in enumerate(self.words)}
         self.decoding = {index: word for (index, word) in enumerate(self.words)}
 
@@ -65,7 +64,7 @@ class Vocabulary:
             (at position 0) and `UNK_TOKEN` (at position 1) are prepended.
         """
         vocab = collections.defaultdict(int)
-        for (_, passage, question, _, _) in samples:
+        for (_, passage, question, _, _, _, _, _, _) in samples:
             for token in itertools.chain(passage, question):
                 vocab[token.lower()] += 1
         top_words = [
@@ -152,7 +151,7 @@ class QADataset(Dataset):
         self.args = args
         self.meta, self.elems = load_dataset(dataset_path)
         self.tags_path = tags_path
-        # self.pos, self.dep = load_tags(tags_path)
+        self.pos, self.dep = load_tags(tags_path)
         self.samples = self._create_samples()
         self.tokenizers = None
         self.batch_size = args.batch_size if 'batch_size' in args else 1
@@ -167,47 +166,47 @@ class QADataset(Dataset):
         Returns:
             A list of words (string).
         """
-        nlp = spacy.load("en")
+        # nlp = spacy.load("en")
 
-        # pos tags
-        pos_tags = load_tag_file(self.args.pos_tag_path)
-        print(len(pos_tags))
-        pos_vocabulary = Vocabulary(pos_tags, len(pos_tags), True)
-        pos_tokenizer = Tokenizer(pos_vocabulary)
-        # dep tags
-        dep_tags = load_tag_file(self.args.dep_tag_path)
-        dep_vocabulary = Vocabulary(dep_tags, len(dep_tags), True)
-        dep_tokenizer = Tokenizer(dep_vocabulary)
+        # # pos tags
+        # pos_tags = load_tag_file(self.args.pos_tag_path)
+        # pos_vocabulary = Vocabulary(pos_tags, len(pos_tags), True)
+        # pos_tokenizer = Tokenizer(pos_vocabulary)
+        # # dep tags
+        # dep_tags = load_tag_file(self.args.dep_tag_path)
+        # dep_vocabulary = Vocabulary(dep_tags, len(dep_tags), True)
+        # dep_tokenizer = Tokenizer(dep_vocabulary)
 
         samples = []
         pos_tags =[]
         dep_tags = []
-        print("Gotta get through " + str(len(self.elems)))
         index = 0
-        for elem in self.elems[0:2]:
+        for elem in self.elems:
             # Unpack the context paragraph. Shorten to max sequence length.
             passage = [
                 token.lower() for (token, offset) in elem['context_tokens']
             ][:self.args.max_context_length]
-            # passage_pos = self.pos[index]
-            # passage_dep = self.dep[index]
-            # index += 1
+            passage_pos = self.pos[index]
+            passage_dep = self.dep[index]
+            if (len(passage_pos) != len(passage)):
+                print("UH OH IN THE PASSAGES")
+            index += 1
             # write out the tags
             # Each passage has several questions associated with it.
             # Additionally, each question has multiple possible answer spans.
             
-            passage_doc = nlp(" ".join(passage))
-            if (len(passage_doc) > len(passage)):
-                i = 0
-                passage_doc = [token for token in passage_doc]
-                while i < len(passage_doc) and i < len(passage):
-                    if (passage_doc[i].text[0] != passage[i][0]):
-                        del passage_doc[i]
-                        i -= 1
-                    i += 1
-                passage_doc = passage_doc[:i]
-            pos_tags.append(pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in passage_doc]))
-            dep_tags.append(dep_tokenizer.convert_tokens_to_ids([token.dep_.lower() for token in passage_doc]))
+            # passage_doc = nlp(" ".join(passage))
+            # if (len(passage_doc) > len(passage)):
+            #     i = 0
+            #     passage_doc = [token for token in passage_doc]
+            #     while i < len(passage_doc) and i < len(passage):
+            #         if (passage_doc[i].text[0] != passage[i][0]):
+            #             del passage_doc[i]
+            #             i -= 1
+            #         i += 1
+            #     passage_doc = passage_doc[:i]
+            # pos_tags.append(pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in passage_doc]))
+            # dep_tags.append(dep_tokenizer.convert_tokens_to_ids([token.dep_.lower() for token in passage_doc]))
             
             for qa in elem['qas']:
                 qid = qa['qid']
@@ -215,22 +214,25 @@ class QADataset(Dataset):
                     token.lower() for (token, offset) in qa['question_tokens']
                 ][:self.args.max_question_length]
 
-                # question_pos = self.pos[index]
-                # question_dep = self.dep[index]
-                # index += 1
+                question_pos = self.pos[index]
+                question_dep = self.dep[index]
+                if (len(question_pos) != len(question)):
+                    print("UH OH IN THE PASSAGES")
 
-                question_doc = nlp(" ".join(question))
-                if (len(question_doc) > len(question)):
-                    i = 0 
-                    question_doc = [token for token in question_doc]
-                    while i < len(question_doc) and i < len(question):
-                        if (question_doc[i].text[0] != question[i][0]):
-                            del question_doc[i]
-                            i -= 1
-                        i += 1
-                    question_doc = question_doc[:i]
-                pos_tags.append(pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in question_doc]))
-                dep_tags.append(dep_tokenizer.convert_tokens_to_ids([token.dep_.lower() for token in question_doc]))
+                index += 1
+
+                # question_doc = nlp(" ".join(question))
+                # if (len(question_doc) > len(question)):
+                #     i = 0 
+                #     question_doc = [token for token in question_doc]
+                #     while i < len(question_doc) and i < len(question):
+                #         if (question_doc[i].text[0] != question[i][0]):
+                #             del question_doc[i]
+                #             i -= 1
+                #         i += 1
+                #     question_doc = question_doc[:i]
+                # pos_tags.append(pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in question_doc]))
+                # dep_tags.append(dep_tokenizer.convert_tokens_to_ids([token.dep_.lower() for token in question_doc]))
 
                 # Select the first answer span, which is formatted as
                 # (start_position, end_position), where the end_position
@@ -238,13 +240,13 @@ class QADataset(Dataset):
                 answers = qa['detected_answers']
                 answer_start, answer_end = answers[0]['token_spans'][0]
                 samples.append(
-                    (qid, passage, question, answer_start, answer_end)
+                    (qid, passage, question, answer_start, answer_end, passage_pos, passage_dep, question_pos, question_dep)
                 )
-                index += 1
-                print("Index is now " + str(index))
-        with open(self.tags_path, "w") as file:
-            final_dict = {'pos': pos_tags, 'dep': dep_tags}
-            file.write(json.dumps(final_dict))
+                # index += 1
+                # print("Index is now " + str(index))
+        # with open(self.tags_path, "w") as file:
+        #     final_dict = {'pos': pos_tags, 'dep': dep_tags}
+        #     file.write(json.dumps(final_dict))
             
         return samples
 
@@ -277,8 +279,7 @@ class QADataset(Dataset):
         end_positions = []
         for idx in example_idxs:
             # Unpack QA sample and tokenize passage/question.
-            qid, passage, question, answer_start, answer_end, passage_pos, passage_dep,
-            question_pos, question_dep = self.samples[idx]
+            qid, passage, question, answer_start, answer_end, passage_pos, passage_dep, question_pos, question_dep = self.samples[idx]
             # Convert words to tensor.
             passage_ids = torch.tensor(
                 self.tokenizers.convert_tokens_to_ids(passage)
@@ -286,6 +287,11 @@ class QADataset(Dataset):
             question_ids = torch.tensor(
                 self.tokenizers.convert_tokens_to_ids(question)
             )
+
+            passage_pos_tags = torch.tensor(passage_pos)
+            passage_dep_tags = torch.tensor(passage_dep)
+            question_pos_tags = torch.tensor(question_pos)
+            question_dep_tags = torch.tensor(question_dep)
 
             if len(passage) != len(passage_pos):
                 print(passage)
