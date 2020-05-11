@@ -168,8 +168,8 @@ class QADataset(Dataset):
         samples = []
         pos_tags =[]
         dep_tags = []
-        printf("Gotta get through " + len(self.elems))
-        i = 0
+        print("Gotta get through " + str(len(self.elems)))
+        myindex = 0
         for elem in self.elems:
             # Unpack the context paragraph. Shorten to max sequence length.
             passage = [
@@ -219,8 +219,8 @@ class QADataset(Dataset):
                 samples.append(
                     (qid, passage, question, answer_start, answer_end)
                 )
-            i += 1
-            print("i is now " + i)
+            myindex += 1
+            print("i is now " + str(myindex))
         with open("tags.jsonl", "w") as file:
             final_dict = {'pos': pos_tags, 'dep': dep_tags}
             file.write(json.dumps(final_dict))
