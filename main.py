@@ -409,7 +409,7 @@ def evaluate(args, epoch, model, dataset, nlp):
     return eval_loss / eval_steps
 
 
-def write_predictions(args, model, dataset):
+def write_predictions(args, model, dataset, nlp):
     """
     Writes model predictions to an output file. The official QA metrics (EM/F1)
     can be computed using `evaluation.py`. 

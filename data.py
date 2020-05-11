@@ -186,8 +186,6 @@ class QADataset(Dataset):
                 samples.append(
                     (qid, passage, question, answer_start, answer_end)
                 )
-            if len(samples) > 256:
-                break
         return samples
 
     def _create_data_generator(self, nlp, shuffle_examples=False):
@@ -230,11 +228,38 @@ class QADataset(Dataset):
 
             # use spaCy for parsing part of speech and dependency tags
             passage_doc = nlp(" ".join(passage))
+            # spaCy has issues parsing periods as part of abbreviations so manually remove tokens
+            # that do not match the passage tokens
+            if (len(passage_doc) > len(passage)):
+                i = 0
+                passage_doc = [token for token in passage_doc]
+                while i < len(passage_doc) and i < len(passage):
+                    if (passage_doc[i].text[0] != passage[i][0]):
+                        del passage_doc[i]
+                        i -= 1
+                    i += 1
+                passage_doc = passage_doc[:i]
             question_doc = nlp(" ".join(question))
-            print(idx)
+            if (len(question_doc) > len(question)):
+                i = 0 
+                question_doc = [token for token in question_doc]
+                while i < len(question_doc) and i < len(question):
+                    if (question_doc[i].text[0] != question[i][0]):
+                        del question_doc[i]
+                        i -= 1
+                    i += 1
+                question_doc = question_doc[:i]
             passage_pos_tags = torch.tensor(
                 self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in passage_doc])
             )
+
+            if len(passage) != len(passage_doc):
+                print(passage)
+                print([token.text for token in passage_doc])
+
+            if len(question) != len(question_doc):
+                print(question)
+                print([token.text for token in question_doc])
 
             question_pos_tags = torch.tensor(
                 self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in question_doc])
@@ -335,7 +360,6 @@ class QADataset(Dataset):
                 padded_passages_words[iii][:len(p_words)] = p_words
                 padded_questions_words[iii][:len(q_words)] = q_words
                 padded_passages_pos[iii][:len(p_pos)] = p_pos
-                print(q_pos.size())
                 padded_questions_pos[iii][:len(q_pos)] = q_pos
                 padded_passages_dep[iii][:len(p_dep)] = p_dep
                 padded_questions_pos[iii][:len(q_dep)] = q_dep
