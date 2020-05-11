@@ -76,7 +76,7 @@ class AlignedAttention(nn.Module):
         # print("PKEY" + str(p_key.size()))
         # print("QKEY" + str(q_key.size()))
         scores = p_key.bmm(q_key.transpose(2, 1))  # [batch_size, p_len, q_len]
-        print(scores.size())
+        # print(scores.size())
         # Stack question mask p_len times
         q_mask = q_mask.unsqueeze(1).repeat(1, scores.size(1), 1)
         # print(q_mask.size())
