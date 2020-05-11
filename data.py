@@ -12,7 +12,7 @@ import json
 
 from torch.utils.data import Dataset
 from random import shuffle
-from utils import cuda, load_dataset
+from utils import cuda, load_dataset, load_tags, load_tag_file
 
 
 PAD_TOKEN = '[PAD]'
@@ -38,6 +38,7 @@ class Vocabulary:
     """
     def __init__(self, samples, vocab_size, is_list):
         self.words = self._initialize_list(samples) if is_list else self._initialize(samples, vocab_size)
+        print("LIST IS: " + str(self.words))
         self.encoding = {word: index for (index, word) in enumerate(self.words)}
         self.decoding = {index: word for (index, word) in enumerate(self.words)}
 
@@ -147,13 +148,15 @@ class QADataset(Dataset):
         tokenizer: `Tokenizer` object.
         batch_size: Int. The number of example in a mini batch.
     """
-    def __init__(self, args, path):
+    def __init__(self, args, dataset_path, tags_path):
         self.args = args
-        self.meta, self.elems = load_dataset(path)
+        self.meta, self.elems = load_dataset(dataset_path)
+        self.tags_path = tags_path
+        # self.pos, self.dep = load_tags(tags_path)
         self.samples = self._create_samples()
         self.tokenizers = None
         self.batch_size = args.batch_size if 'batch_size' in args else 1
-        self.pad_token_id = self.tokenizers['word'].pad_token_id \
+        self.pad_token_id = self.tokenizers.pad_token_id \
             if self.tokenizers is not None else 0
 
     def _create_samples(self):
@@ -164,17 +167,31 @@ class QADataset(Dataset):
         Returns:
             A list of words (string).
         """
-        nlp = spacy.load("en_core_web_sm")
+        nlp = spacy.load("en")
+
+        # pos tags
+        pos_tags = load_tag_file(self.args.pos_tag_path)
+        print(len(pos_tags))
+        pos_vocabulary = Vocabulary(pos_tags, len(pos_tags), True)
+        pos_tokenizer = Tokenizer(pos_vocabulary)
+        # dep tags
+        dep_tags = load_tag_file(self.args.dep_tag_path)
+        dep_vocabulary = Vocabulary(dep_tags, len(dep_tags), True)
+        dep_tokenizer = Tokenizer(dep_vocabulary)
+
         samples = []
         pos_tags =[]
         dep_tags = []
         print("Gotta get through " + str(len(self.elems)))
-        myindex = 0
-        for elem in self.elems:
+        index = 0
+        for elem in self.elems[0:2]:
             # Unpack the context paragraph. Shorten to max sequence length.
             passage = [
                 token.lower() for (token, offset) in elem['context_tokens']
             ][:self.args.max_context_length]
+            # passage_pos = self.pos[index]
+            # passage_dep = self.dep[index]
+            # index += 1
             # write out the tags
             # Each passage has several questions associated with it.
             # Additionally, each question has multiple possible answer spans.
@@ -189,14 +206,18 @@ class QADataset(Dataset):
                         i -= 1
                     i += 1
                 passage_doc = passage_doc[:i]
-            pos_tags.append([token.pos_ for token in passage_doc])
-            dep_tags.append([token.dep_ for token in passage_doc])
+            pos_tags.append(pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in passage_doc]))
+            dep_tags.append(dep_tokenizer.convert_tokens_to_ids([token.dep_.lower() for token in passage_doc]))
             
             for qa in elem['qas']:
                 qid = qa['qid']
                 question = [
                     token.lower() for (token, offset) in qa['question_tokens']
                 ][:self.args.max_question_length]
+
+                # question_pos = self.pos[index]
+                # question_dep = self.dep[index]
+                # index += 1
 
                 question_doc = nlp(" ".join(question))
                 if (len(question_doc) > len(question)):
@@ -208,8 +229,8 @@ class QADataset(Dataset):
                             i -= 1
                         i += 1
                     question_doc = question_doc[:i]
-                pos_tags.append([token.pos_ for token in question_doc])
-                dep_tags.append([token.dep_ for token in question_doc])
+                pos_tags.append(pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in question_doc]))
+                dep_tags.append(dep_tokenizer.convert_tokens_to_ids([token.dep_.lower() for token in question_doc]))
 
                 # Select the first answer span, which is formatted as
                 # (start_position, end_position), where the end_position
@@ -219,15 +240,15 @@ class QADataset(Dataset):
                 samples.append(
                     (qid, passage, question, answer_start, answer_end)
                 )
-            myindex += 1
-            print("i is now " + str(myindex))
-        with open("tags.jsonl", "w") as file:
+                index += 1
+                print("Index is now " + str(index))
+        with open(self.tags_path, "w") as file:
             final_dict = {'pos': pos_tags, 'dep': dep_tags}
             file.write(json.dumps(final_dict))
             
         return samples
 
-    def _create_data_generator(self, nlp, shuffle_examples=False):
+    def _create_data_generator(self, shuffle_examples=False):
         """
         Converts preprocessed text data to Torch tensors and returns a
         generator.
@@ -256,61 +277,23 @@ class QADataset(Dataset):
         end_positions = []
         for idx in example_idxs:
             # Unpack QA sample and tokenize passage/question.
-            qid, passage, question, answer_start, answer_end = self.samples[idx]
+            qid, passage, question, answer_start, answer_end, passage_pos, passage_dep,
+            question_pos, question_dep = self.samples[idx]
             # Convert words to tensor.
             passage_ids = torch.tensor(
-                self.tokenizers['word'].convert_tokens_to_ids(passage)
+                self.tokenizers.convert_tokens_to_ids(passage)
             )
             question_ids = torch.tensor(
-                self.tokenizers['word'].convert_tokens_to_ids(question)
+                self.tokenizers.convert_tokens_to_ids(question)
             )
 
-            # use spaCy for parsing part of speech and dependency tags
-            passage_doc = nlp(" ".join(passage))
-            # spaCy has issues parsing periods as part of abbreviations so manually remove tokens
-            # that do not match the passage tokens
-            if (len(passage_doc) > len(passage)):
-                i = 0
-                passage_doc = [token for token in passage_doc]
-                while i < len(passage_doc) and i < len(passage):
-                    if (passage_doc[i].text[0] != passage[i][0]):
-                        del passage_doc[i]
-                        i -= 1
-                    i += 1
-                passage_doc = passage_doc[:i]
-            question_doc = nlp(" ".join(question))
-            if (len(question_doc) > len(question)):
-                i = 0 
-                question_doc = [token for token in question_doc]
-                while i < len(question_doc) and i < len(question):
-                    if (question_doc[i].text[0] != question[i][0]):
-                        del question_doc[i]
-                        i -= 1
-                    i += 1
-                question_doc = question_doc[:i]
-            passage_pos_tags = torch.tensor(
-                self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in passage_doc])
-            )
-
-            if len(passage) != len(passage_doc):
+            if len(passage) != len(passage_pos):
                 print(passage)
-                print([token.text for token in passage_doc])
+                print([token for token in passage_pos])
 
-            if len(question) != len(question_doc):
+            if len(question) != len(question_pos):
                 print(question)
-                print([token.text for token in question_doc])
-
-            question_pos_tags = torch.tensor(
-                self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in question_doc])
-            )
-
-            passage_dep_tags = torch.tensor(
-                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in passage_doc])
-            )
-
-            question_dep_tags = torch.tensor(
-                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in question_doc])
-            )
+                print([token for token in question_pos])
 
             answer_start_ids = torch.tensor(answer_start)
             answer_end_ids = torch.tensor(answer_end)
@@ -423,7 +406,7 @@ class QADataset(Dataset):
                 break
             yield batch_dict
 
-    def get_batch(self, nlp, shuffle_examples=False):
+    def get_batch(self, shuffle_examples=False):
         """
         Returns a data generator that supports mini-batch.
 
@@ -434,18 +417,18 @@ class QADataset(Dataset):
             A data generator that iterates though all batches.
         """
         return self._create_batches(
-            self._create_data_generator(nlp, shuffle_examples=shuffle_examples),
+            self._create_data_generator(shuffle_examples=shuffle_examples),
             self.batch_size
         )
 
-    def register_tokenizers(self, word_tokenizer, pos_tokenizer, dep_tokenizer):
+    def register_tokenizers(self, word_tokenizer):
         """
         Stores `Tokenizer` object as an instance variable.
 
         Args:
             tokenizer: If `True`, shuffle examples. Default: `False`
         """
-        self.tokenizers = {"word": word_tokenizer, "pos": pos_tokenizer, "dep": dep_tokenizer}
+        self.tokenizers = word_tokenizer
     
     def __len__(self):
         return len(self.samples)

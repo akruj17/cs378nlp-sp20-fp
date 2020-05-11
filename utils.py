@@ -62,6 +62,11 @@ def load_dataset(path):
     meta, samples = elems[0], elems[1:]
     return (meta, samples)
 
+def load_tags(path):
+    with open(path, 'r') as f:
+        elems = json.loads(f.readline().strip())
+        pos, dep = elems['pos'], elems['dep']
+    return (pos, dep)
 
 def load_cached_embeddings(path):
     """
