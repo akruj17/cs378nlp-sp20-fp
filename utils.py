@@ -106,6 +106,7 @@ def load_embeddings(path):
     return embedding_map
 
 def load_tag_file(path):
+    file = open(path, 'r') 
     tags = []
     while True: 
         line = file.readline() 
@@ -114,7 +115,6 @@ def load_tag_file(path):
         tags.append(line.strip())    
     file.close() 
     return tags
-
 
 def search_span_endpoints(start_probs, end_probs, window=15):
     """

@@ -11,8 +11,6 @@ import torch.nn.functional as F
 from utils import cuda, load_cached_embeddings
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
-DEPENDENCY_TOKENS = 48
-POS_TOKENS = 53
 
 def _sort_batch_by_length(tensor, sequence_lengths):
     """
@@ -187,16 +185,16 @@ class BaselineReader(nn.Module):
 
         # Initialize embedding layers (1)
         self.word_embedding = nn.Embedding(args.vocab_size, args.embedding_dim)
-        self.pos_embedding = nn.Embedding(len(POS_TOKENS), args.embedding_dim)
-        self.dep_embedding = nn.Embedding(len(DEPENDENCY_TOKENS), args.embedding_dim)
+        self.pos_embedding = nn.Embedding(args.pos_size, args.embedding_dim)
+        self.dep_embedding = nn.Embedding(args.dep_size, args.embedding_dim)
 
         dependency_embeddings = torch.zeros(
-            (len(DEPENDENCY_TOKENS), self.args.embedding_dim)
+            (args.dep_size, self.args.embedding_dim)
         ).uniform_(-0.1, 0.1)
         self.dep_embedding.weight.data = cuda(self.args, dependency_embeddings)
 
         pos_embeddings = torch.zeros(
-            (len(POS_TOKENS), self.args.embedding_dim)
+            (args.pos_size, self.args.embedding_dim)
         ).uniform_(-0.1, 0.1)
         self.pos_embedding.weight.data = cuda(self.args, pos_embeddings)
 
@@ -300,8 +298,8 @@ class BaselineReader(nn.Module):
 
     def forward(self, batch):
         # Obtain masks and lengths for passage and question.
-        passage_mask = (batch['passages'] != self.pad_token_id)  # [batch_size, p_len]
-        question_mask = (batch['questions'] != self.pad_token_id)  # [batch_size, q_len]
+        passage_mask = (batch['passages_words'] != self.pad_token_id)  # [batch_size, p_len]
+        question_mask = (batch['questions_words'] != self.pad_token_id)  # [batch_size, q_len]
         passage_lengths = passage_mask.long().sum(-1)  # [batch_size]
         question_lengths = question_mask.long().sum(-1)  # [batch_size]
 

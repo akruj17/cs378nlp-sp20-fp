@@ -23,6 +23,7 @@ Author:
 import argparse
 import pprint
 import json
+import spacy
 
 import torch
 import numpy as np
@@ -205,7 +206,18 @@ parser.add_argument(
     default='dep_tags.txt',
     help="file listing all possible dependency tags"
 )
-
+parser.add_argument(
+    '--pos_size',
+    type=int,
+    default=53,
+    help='POS size (dynamically set, do not change!)',
+)
+parser.add_argument(
+    '--dep_size',
+    type=int,
+    default=48,
+    help='dependency tag size (dynamically set, do not change!)',
+)
 
 def _print_arguments(args):
     """Pretty prints command line args to stdout.
@@ -288,7 +300,7 @@ def _calculate_loss(
     return (start_loss + end_loss) / 2.
 
 
-def train(args, epoch, model, dataset):
+def train(args, epoch, model, dataset, nlp):
     """
     Trains the model for a single epoch using the training dataset.
 
@@ -318,7 +330,7 @@ def train(args, epoch, model, dataset):
     # Set up training dataloader. Creates `args.batch_size`-sized
     # batches from available samples.
     train_dataloader = tqdm(
-        dataset.get_batch(shuffle_examples=args.shuffle_examples),
+        dataset.get_batch(nlp, shuffle_examples=args.shuffle_examples),
         **_TQDM_OPTIONS,
     )
 
@@ -349,7 +361,7 @@ def train(args, epoch, model, dataset):
     return train_loss / train_steps
 
 
-def evaluate(args, epoch, model, dataset):
+def evaluate(args, epoch, model, dataset, nlp):
     """
     Evaluates the model for a single epoch using the development dataset.
 
@@ -372,7 +384,7 @@ def evaluate(args, epoch, model, dataset):
     # Set up evaluation dataloader. Creates `args.batch_size`-sized
     # batches from available samples. Does not shuffle.
     eval_dataloader = tqdm(
-        dataset.get_batch(shuffle_examples=False),
+        dataset.get_batch(nlp, shuffle_examples=False),
         **_TQDM_OPTIONS,
     )
 
@@ -414,7 +426,7 @@ def write_predictions(args, model, dataset):
 
     # Set up test dataloader.
     test_dataloader = tqdm(
-        dataset.get_batch(shuffle_examples=False),
+        dataset.get_batch(nlp, shuffle_examples=False),
         **_TQDM_OPTIONS,
     )
 
@@ -477,23 +489,25 @@ def main(args):
     dev_dataset = QADataset(args, args.dev_path)
 
     # Create tokenizers for words, pos tags, and dependency tags.
-    word_vocabulary = Vocabulary(train_dataset.samples, args.vocab_size)
+    word_vocabulary = Vocabulary(train_dataset.samples, args.vocab_size, False)
     word_tokenizer = Tokenizer(word_vocabulary)
     # pos tags
     pos_tags = load_tag_file(args.pos_tag_path)
-    pos_vocabulary = Vocabulary(pos_tags, len(pos_tags))
+    pos_vocabulary = Vocabulary(pos_tags, len(pos_tags), True)
     pos_tokenizer = Tokenizer(pos_vocabulary)
     # dep tags
     dep_tags = load_tag_file(args.dep_tag_path)
-    dep_vocabulary = Vocabulary(dep_tags, len(dep_tags))
+    dep_vocabulary = Vocabulary(dep_tags, len(dep_tags), True)
     dep_tokenizer = Tokenizer(dep_vocabulary)
 
 
     for dataset in (train_dataset, dev_dataset):
         dataset.register_tokenizers(word_tokenizer, pos_tokenizer, dep_tokenizer)
-    args.vocab_size = len(vocabulary)
-    args.pad_token_id = tokenizer.pad_token_id
-    print(f'vocab words = {len(vocabulary)}')
+    args.vocab_size = len(word_vocabulary)
+    args.pos_size = len(pos_vocabulary)
+    args.dep_size = len(dep_vocabulary)
+    args.pad_token_id = word_tokenizer.pad_token_id
+    print(f'vocab words = {len(word_vocabulary)}')
 
     # Print number of samples.
     print(f'train samples = {len(train_dataset)}')
@@ -503,14 +517,16 @@ def main(args):
     # Select model.
     model = _select_model(args)
     num_pretrained = model.load_pretrained_embeddings(
-        vocabulary, args.embedding_path
+        word_vocabulary, args.embedding_path
     )
-    pct_pretrained = round(num_pretrained / len(vocabulary) * 100., 2)
+    pct_pretrained = round(num_pretrained / len(word_vocabulary) * 100., 2)
     print(f'using pre-trained embeddings from \'{args.embedding_path}\'')
     print(
-        f'initialized {num_pretrained}/{len(vocabulary)} '
+        f'initialized {num_pretrained}/{len(word_vocabulary)} '
         f'embeddings ({pct_pretrained}%)'
     )
+    print("Num of pos tags is" + str(len(pos_vocabulary)))
+    print("Num of dep tags is" + str(len(dep_vocabulary)))
     print()
 
     if args.use_gpu:
@@ -521,6 +537,8 @@ def main(args):
     print(model)
     print()
 
+    nlp = spacy.load("en_core_web_sm")
+
     if args.do_train:
         # Track training statistics for checkpointing.
         eval_history = []
@@ -529,8 +547,8 @@ def main(args):
         # Begin training.
         for epoch in range(1, args.epochs + 1):
             # Perform training and evaluation steps.
-            train_loss = train(args, epoch, model, train_dataset)
-            eval_loss = evaluate(args, epoch, model, dev_dataset)
+            train_loss = train(args, epoch, model, train_dataset, nlp)
+            eval_loss = evaluate(args, epoch, model, dev_dataset, nlp)
 
             # If the model's evaluation loss yields a global improvement,
             # checkpoint the model.
@@ -559,7 +577,7 @@ def main(args):
     if args.do_test:
         # Write predictions to the output file. Use the printed command
         # below to obtain official EM/F1 metrics.
-        write_predictions(args, model, dev_dataset)
+        write_predictions(args, model, dev_dataset, nlp)
         eval_cmd = (
             'python3 evaluate.py '
             f'--dataset_path {args.dev_path} '

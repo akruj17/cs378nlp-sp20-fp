@@ -186,10 +186,11 @@ class QADataset(Dataset):
                 samples.append(
                     (qid, passage, question, answer_start, answer_end)
                 )
-                
+            if len(samples) > 256:
+                break
         return samples
 
-    def _create_data_generator(self, shuffle_examples=False, nlp):
+    def _create_data_generator(self, nlp, shuffle_examples=False):
         """
         Converts preprocessed text data to Torch tensors and returns a
         generator.
@@ -219,33 +220,32 @@ class QADataset(Dataset):
         for idx in example_idxs:
             # Unpack QA sample and tokenize passage/question.
             qid, passage, question, answer_start, answer_end = self.samples[idx]
-
             # Convert words to tensor.
             passage_ids = torch.tensor(
-                self.tokenizers['word'].convert_tokens_to_ids(passage),
+                self.tokenizers['word'].convert_tokens_to_ids(passage)
             )
             question_ids = torch.tensor(
                 self.tokenizers['word'].convert_tokens_to_ids(question)
             )
 
             # use spaCy for parsing part of speech and dependency tags
-            passage_doc = nlp(passage)
-            question_doc = nlp(question)
-
-            passage_pos_tags = torch(
+            passage_doc = nlp(" ".join(passage))
+            question_doc = nlp(" ".join(question))
+            print(idx)
+            passage_pos_tags = torch.tensor(
                 self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in passage_doc])
             )
 
-            question_pos_tags = torch(
+            question_pos_tags = torch.tensor(
                 self.tokenizers['pos'].convert_tokens_to_ids([token.tag_ for token in question_doc])
             )
 
-            passage_dep_tags = torch(
-                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in nlp(passage)])
+            passage_dep_tags = torch.tensor(
+                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in passage_doc])
             )
 
-            question_dep_tags = torch(
-                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in nlp(question)])
+            question_dep_tags = torch.tensor(
+                self.tokenizers['dep'].convert_tokens_to_ids([token.dep_ for token in question_doc])
             )
 
             answer_start_ids = torch.tensor(answer_start)
@@ -335,6 +335,7 @@ class QADataset(Dataset):
                 padded_passages_words[iii][:len(p_words)] = p_words
                 padded_questions_words[iii][:len(q_words)] = q_words
                 padded_passages_pos[iii][:len(p_pos)] = p_pos
+                print(q_pos.size())
                 padded_questions_pos[iii][:len(q_pos)] = q_pos
                 padded_passages_dep[iii][:len(p_dep)] = p_dep
                 padded_questions_pos[iii][:len(q_dep)] = q_dep
@@ -359,7 +360,7 @@ class QADataset(Dataset):
                 break
             yield batch_dict
 
-    def get_batch(self, shuffle_examples=False):
+    def get_batch(self, nlp, shuffle_examples=False):
         """
         Returns a data generator that supports mini-batch.
 
@@ -370,7 +371,7 @@ class QADataset(Dataset):
             A data generator that iterates though all batches.
         """
         return self._create_batches(
-            self._create_data_generator(shuffle_examples=shuffle_examples),
+            self._create_data_generator(nlp, shuffle_examples=shuffle_examples),
             self.batch_size
         )
 
