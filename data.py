@@ -8,6 +8,7 @@ import collections
 import itertools
 import torch
 import spacy
+import json
 
 from torch.utils.data import Dataset
 from random import shuffle
@@ -163,20 +164,52 @@ class QADataset(Dataset):
         Returns:
             A list of words (string).
         """
+        nlp = spacy.load("en_core_web_sm")
         samples = []
+        pos_tags =[]
+        dep_tags = []
+        printf("Gotta get through " + len(self.elems))
+        i = 0
         for elem in self.elems:
             # Unpack the context paragraph. Shorten to max sequence length.
             passage = [
                 token.lower() for (token, offset) in elem['context_tokens']
             ][:self.args.max_context_length]
-
+            # write out the tags
             # Each passage has several questions associated with it.
             # Additionally, each question has multiple possible answer spans.
+            
+            passage_doc = nlp(" ".join(passage))
+            if (len(passage_doc) > len(passage)):
+                i = 0
+                passage_doc = [token for token in passage_doc]
+                while i < len(passage_doc) and i < len(passage):
+                    if (passage_doc[i].text[0] != passage[i][0]):
+                        del passage_doc[i]
+                        i -= 1
+                    i += 1
+                passage_doc = passage_doc[:i]
+            pos_tags.append([token.pos_ for token in passage_doc])
+            dep_tags.append([token.dep_ for token in passage_doc])
+            
             for qa in elem['qas']:
                 qid = qa['qid']
                 question = [
                     token.lower() for (token, offset) in qa['question_tokens']
                 ][:self.args.max_question_length]
+
+                question_doc = nlp(" ".join(question))
+                if (len(question_doc) > len(question)):
+                    i = 0 
+                    question_doc = [token for token in question_doc]
+                    while i < len(question_doc) and i < len(question):
+                        if (question_doc[i].text[0] != question[i][0]):
+                            del question_doc[i]
+                            i -= 1
+                        i += 1
+                    question_doc = question_doc[:i]
+                pos_tags.append([token.pos_ for token in question_doc])
+                dep_tags.append([token.dep_ for token in question_doc])
 
                 # Select the first answer span, which is formatted as
                 # (start_position, end_position), where the end_position
@@ -186,6 +219,12 @@ class QADataset(Dataset):
                 samples.append(
                     (qid, passage, question, answer_start, answer_end)
                 )
+            i += 1
+            print("i is now " + i)
+        with open("tags.jsonl", "w") as file:
+            final_dict = {'pos': pos_tags, 'dep': dep_tags}
+            file.write(json.dumps(final_dict))
+            
         return samples
 
     def _create_data_generator(self, nlp, shuffle_examples=False):
