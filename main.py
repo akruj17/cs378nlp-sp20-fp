@@ -409,7 +409,7 @@ def evaluate(args, epoch, model, dataset):
     return eval_loss / eval_steps
 
 
-def write_predictions(args, model, dataset):
+def write_predictions(args, model, dataset, vocabulary):
     """
     Writes model predictions to an output file. The official QA metrics (EM/F1)
     can be computed using `evaluation.py`. 
@@ -445,14 +445,14 @@ def write_predictions(args, model, dataset):
             for j in range(start_logits.size(0)):
                 # Find question index and passage.
                 sample_index = args.batch_size * i + j
-                qid, passage, _, _, _ = dataset.samples[sample_index]
+                qid, passage, _, _, _, _, _, _, _ = dataset.samples[sample_index]
 
                 # Unpack start and end probabilities. Find the constrained
                 # (start, end) pair that has the highest joint probability.
                 start_probs = unpack(batch_start_probs[j])
                 end_probs = unpack(batch_end_probs[j])
                 start_index, end_index = search_span_endpoints(
-                        start_probs, end_probs
+                    start_probs, end_probs
                 )
                 
                 # Grab predicted span.
@@ -485,15 +485,15 @@ def main(args):
         print()
 
     # Set up datasets.
-    train_dataset = QADataset(args, args.train_path, "squad_train_tags.jsonl")
-    dev_dataset = QADataset(args, args.dev_path, "squad_dev_tags.jsonl")
+    train_dataset = QADataset(args, args.train_path, "squad_train_tags.jsonl", False)
+    dev_dataset = QADataset(args, args.dev_path, "squad_dev_tags.jsonl", True)
 
     # Create tokenizers for words, pos tags, and dependency tags.
     word_vocabulary = Vocabulary(train_dataset.samples, args.vocab_size, False)
     word_tokenizer = Tokenizer(word_vocabulary)
 
     for dataset in (train_dataset, dev_dataset):
-        dataset.register_tokenizers(word_tokenizer)
+        dataset.register_tokenizer(word_tokenizer)
     args.vocab_size = len(word_vocabulary)
     args.pad_token_id = word_tokenizer.pad_token_id
     print(f'vocab words = {len(word_vocabulary)}')
@@ -562,7 +562,7 @@ def main(args):
     if args.do_test:
         # Write predictions to the output file. Use the printed command
         # below to obtain official EM/F1 metrics.
-        write_predictions(args, model, dev_dataset)
+        write_predictions(args, model, dev_dataset, word_vocabulary)
         eval_cmd = (
             'python3 evaluate.py '
             f'--dataset_path {args.dev_path} '

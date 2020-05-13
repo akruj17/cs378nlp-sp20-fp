@@ -13,6 +13,7 @@ import json
 from torch.utils.data import Dataset
 from random import shuffle
 from utils import cuda, load_dataset, load_tags, load_tag_file
+from spacy.lang.en.stop_words import STOP_WORDS
 
 
 PAD_TOKEN = '[PAD]'
@@ -147,18 +148,18 @@ class QADataset(Dataset):
         tokenizer: `Tokenizer` object.
         batch_size: Int. The number of example in a mini batch.
     """
-    def __init__(self, args, dataset_path, tags_path):
+    def __init__(self, args, dataset_path, tags_path, trim):
         self.args = args
         self.meta, self.elems = load_dataset(dataset_path)
         self.tags_path = tags_path
         self.pos, self.dep = load_tags(tags_path)
-        self.samples = self._create_samples()
+        self.samples = self._create_samples(trim)
         self.tokenizers = None
         self.batch_size = args.batch_size if 'batch_size' in args else 1
         self.pad_token_id = self.tokenizers.pad_token_id \
             if self.tokenizers is not None else 0
 
-    def _create_samples(self):
+    def _create_samples(self, trim):
         """
         Formats raw examples to desired form. Any passages/questions longer
         than max sequence length will be truncated.
@@ -166,30 +167,34 @@ class QADataset(Dataset):
         Returns:
             A list of words (string).
         """
-        # nlp = spacy.load("en")
+        nlp = None
+        if (trim):
+            nlp = spacy.load("en_core_web_lg")
+            sentencizer = nlp.create_pipe("sentencizer")
+            nlp.add_pipe(sentencizer)
 
         # # pos tags
-        # pos_tags = load_tag_file(self.args.pos_tag_path)
-        # pos_vocabulary = Vocabulary(pos_tags, len(pos_tags), True)
-        # pos_tokenizer = Tokenizer(pos_vocabulary)
+        pos_tags = load_tag_file(self.args.pos_tag_path)
+        pos_vocabulary = Vocabulary(pos_tags, len(pos_tags), True)
+        pos_tokenizer = Tokenizer(pos_vocabulary)
         # # dep tags
-        # dep_tags = load_tag_file(self.args.dep_tag_path)
-        # dep_vocabulary = Vocabulary(dep_tags, len(dep_tags), True)
-        # dep_tokenizer = Tokenizer(dep_vocabulary)
+        dep_tags = load_tag_file(self.args.dep_tag_path)
+        dep_vocabulary = Vocabulary(dep_tags, len(dep_tags), True)
+        dep_tokenizer = Tokenizer(dep_vocabulary)
 
         samples = []
         pos_tags =[]
         dep_tags = []
         index = 0
+        if (trim):
+            print("Gotta get through " + str(len(self.elems)))
         for elem in self.elems:
             # Unpack the context paragraph. Shorten to max sequence length.
             passage = [
                 token.lower() for (token, offset) in elem['context_tokens']
-            ][:self.args.max_context_length]
+            ]
             passage_pos = self.pos[index]
             passage_dep = self.dep[index]
-            if (len(passage_pos) != len(passage)):
-                print("UH OH IN THE PASSAGES")
             index += 1
             # write out the tags
             # Each passage has several questions associated with it.
@@ -207,7 +212,8 @@ class QADataset(Dataset):
             #     passage_doc = passage_doc[:i]
             # pos_tags.append(pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in passage_doc]))
             # dep_tags.append(dep_tokenizer.convert_tokens_to_ids([token.dep_.lower() for token in passage_doc]))
-            
+            if trim:
+                sentences = nlp(elem['context']).sents
             for qa in elem['qas']:
                 qid = qa['qid']
                 question = [
@@ -216,10 +222,58 @@ class QADataset(Dataset):
 
                 question_pos = self.pos[index]
                 question_dep = self.dep[index]
-                if (len(question_pos) != len(question)):
-                    print("UH OH IN THE PASSAGES")
 
                 index += 1
+
+                if trim:
+                    verbs = []
+                    # search for important verbs
+                    for i in range(0, len(question_pos)):
+                        if 43 <= question_pos[i] <= 48:
+                            # do not consider stop words
+                            token = question[i]
+                            measure = nlp.vocab[token]
+                            if not measure.is_stop:
+                                verbs.append(measure)
+                    # now go through the passage and search for the important verbs
+                    passage_final = []
+                    pos_final = []
+                    dep_final = []
+                    for sent in sentences:
+                        added = False
+                        for token in sent:
+                            measure = nlp.vocab[token.text]
+                            if measure.is_stop:
+                                continue
+                            for verb in verbs:
+                                if (measure.similarity(verb) > 0.4):
+                                    # add this sentence
+                                    passage_final += [token.text.lower() for token in sent]
+                                    added = True
+                                    break
+                            if added:
+                                break
+                                # trim the passage to contain only sentences with important verbs
+                    if len(passage_final) > 0:
+                        passage_doc = nlp(" ".join(passage_final))
+                        if (len(passage_doc) > len(passage_final)):
+                            i = 0
+                            passage_doc = [token for token in passage_doc]
+                            while i < len(passage_doc) and i < len(passage_final):
+                                if (passage_doc[i].text[0] != passage_final[i][0]):
+                                    del passage_doc[i]
+                                    i -= 1
+                                i += 1
+                            passage_doc = passage_doc[:i]
+                            print(len(passage_doc), len(passage_final))
+                            assert(len(passage_doc) == len(passage_final))
+                        passage_pos = pos_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in passage_doc][:self.args.max_context_length])
+                        passage_dep = dep_tokenizer.convert_tokens_to_ids([token.tag_.lower() for token in passage_doc][:self.args.max_context_length])
+                        passage = passage_final[:self.args.max_context_length]
+                    else:
+                        passage = passage[:self.args.max_context_length]                    
+                        # print(index)
+
 
                 # question_doc = nlp(" ".join(question))
                 # if (len(question_doc) > len(question)):
@@ -427,7 +481,7 @@ class QADataset(Dataset):
             self.batch_size
         )
 
-    def register_tokenizers(self, word_tokenizer):
+    def register_tokenizer(self, word_tokenizer):
         """
         Stores `Tokenizer` object as an instance variable.
 

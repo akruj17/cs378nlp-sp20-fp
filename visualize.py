@@ -84,7 +84,7 @@ def main(args):
     """Visualization of contexts, questions, and colored answer spans."""
 
     # Load dataset, and optionally shuffle.
-    dataset = QADataset(args, args.path)
+    dataset = QADataset(args, args.path, "squad_dev_tags.jsonl", False)
     samples = dataset.samples
     if args.shuffle:
         random.shuffle(samples)
@@ -96,7 +96,7 @@ def main(args):
     print()
 
     # Visualize samples.
-    for (qid, context, question, answer_start, answer_end) in vis_samples:
+    for (qid, context, question, answer_start, answer_end, _, _, _, _) in vis_samples:
         print('[METADATA]')
         print(f'path = \'{args.path}\'')
         print(f'question id = {qid}')
